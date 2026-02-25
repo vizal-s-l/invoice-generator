@@ -30,38 +30,6 @@ def get_gcp_creds():
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Invoice Generator", page_icon="🧾", layout="wide")
 
-# # --- AUTHENTICATION ---
-# def check_password():
-#     def password_entered():
-#         if "password" in st.session_state and "password" in st.secrets:
-#             if st.session_state["password"] == st.secrets["password"]:
-#                 st.session_state["password_correct"] = True
-#                 del st.session_state["password"]
-#             else:
-#                 st.session_state["password_correct"] = False
-#         else:
-#              st.session_state["password_correct"] = True
-
-#     if "password_correct" not in st.session_state:
-#         st.text_input("Please enter the password to access the Invoice Generator", type="password", on_change=password_entered, key="password")
-#         return False
-#     elif not st.session_state["password_correct"]:
-#         st.text_input("Please enter the password to access the Invoice Generator", type="password", on_change=password_entered, key="password")
-#         st.error("😕 Password incorrect")
-#         return False
-#     else:
-#         return True
-
-# is_authenticated = True
-# try:
-#     if st.secrets.get("password"):
-#         is_authenticated = check_password()
-# except Exception:
-#     pass
-
-# if not is_authenticated:
-#     st.stop()
-
 
 # --- APP START ---
 logo_url = "https://lilcoo.in/wp-content/uploads/2026/02/LilCoo-Logo.png"
@@ -145,6 +113,15 @@ billed_by = gs_data['billed_by']
 MOCK_CLIENTS = gs_data['clients']
 MOCK_PRODUCTS = gs_data['products']
 
+# --- CALLBACK FOR PRODUCT SYNC ---
+def on_product_change(idx):
+    selected = st.session_state[f"prod_select_{idx}"]
+    if selected in MOCK_PRODUCTS:
+        st.session_state[f"prod_name_{idx}"] = MOCK_PRODUCTS[selected]["name"] if selected != "Select Product" else ""
+        st.session_state[f"hsn_{idx}"] = MOCK_PRODUCTS[selected]["hsn"]
+        st.session_state[f"price_{idx}"] = float(MOCK_PRODUCTS[selected]["price"])
+        st.session_state[f"gst_{idx}"] = int(MOCK_PRODUCTS[selected]["gst"])
+
 CLIENT_OPTIONS = ["Select Client", "Create New Client"] + list(MOCK_CLIENTS.keys())
 STATES = [
     "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", 
@@ -219,7 +196,8 @@ with head1:
 **PAN:** {billed_by.get('PAN', '')}  
 **Phone:** {billed_by.get('Phone', '')}""")
     from_state = billed_by.get('State', 'Karnataka')
-    st.title("Invoice Generator")
+
+st.title("Invoice Generator")
 
 with head2:
     st.image(logo_url, width=150)
@@ -302,25 +280,25 @@ for i in range(st.session_state.item_rows):
     
     with c1:
         # User selects from dropdown
-        selected_product = st.selectbox(f"Select Product", list(MOCK_PRODUCTS.keys()), key=f"prod_select_{i}")
+        selected_product = st.selectbox(f"Select Product", list(MOCK_PRODUCTS.keys()), key=f"prod_select_{i}", on_change=on_product_change, args=(i,))
         
-    default_hsn = MOCK_PRODUCTS[selected_product]["hsn"]
-    default_price = MOCK_PRODUCTS[selected_product]["price"]
-    default_gst = MOCK_PRODUCTS[selected_product]["gst"]
-    default_name = MOCK_PRODUCTS[selected_product]["name"] if selected_product != "Select Product" else ""
-    
     with c1b:
         # User can edit the name freely
-        product_name = st.text_input(f"Item Name", value=default_name, key=f"prod_name_{i}")
+        product_name = st.text_input(f"Item Name", key=f"prod_name_{i}")
     
     with c2:
-        hsn_code = st.text_input("HSN", value=default_hsn, key=f"hsn_{i}")
+        hsn_code = st.text_input("HSN", key=f"hsn_{i}")
     with c3:
         quantity = st.number_input("Qty", min_value=1, value=1, step=1, key=f"qty_{i}")
     with c4:
-        base_price = st.number_input("Unit Rate", min_value=0.0, value=float(default_price), step=100.0, key=f"price_{i}")
+        # Ensure price is a float in session state if not already set
+        if f"price_{i}" not in st.session_state:
+            st.session_state[f"price_{i}"] = 0.0
+        base_price = st.number_input("Unit Rate", min_value=0.0, step=100.0, key=f"price_{i}")
     with c5:
-        gst_percent = st.number_input("GST %", min_value=0, value=default_gst, step=1, key=f"gst_{i}")
+        if f"gst_{i}" not in st.session_state:
+            st.session_state[f"gst_{i}"] = 18
+        gst_percent = st.number_input("GST %", min_value=0, step=1, key=f"gst_{i}")
         
     row_total_base = base_price * quantity
     
@@ -740,5 +718,3 @@ if invoice_items:
             st.rerun()
 else:
     st.info("Please enter at least one product to see the invoice summary.")
-
-
