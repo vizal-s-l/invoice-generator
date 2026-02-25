@@ -106,6 +106,7 @@ def get_google_sheets_data():
             
     except Exception as e:
         print(f"Error loading data from Google Sheets: {e}")
+        st.error(f"⚠️ Could not load data from Google Sheets. Check your Secrets/Credentials.")
     return data
 
 gs_data = get_google_sheets_data()
@@ -364,270 +365,259 @@ if invoice_items:
     st.divider()
     
     # PDF Generation Setup
-    def generate_pdf():
-        
-        # We need a custom class to handle multi-page headers and footers properly
-        class InvoicePDF(FPDF):
-            def __init__(self, inv_no, inv_date, billed_to_name):
-                super().__init__()
-                self.inv_no = inv_no
-                self.inv_date = inv_date
-                self.billed_to_name = billed_to_name
-                
-            def footer(self):
-                # Go to 35 mm from bottom
-                self.set_y(-35)
-                
-                # Separator Line First (The "Page Break" line)
-                self.line(self.get_x(), self.get_y(), 210 - self.get_x(), self.get_y())
-                self.ln(2)
-                
-                # --- Page Breaker Info ---
-                # Left side: Invoice No and Date
-                # Right side: Billed To
-                self.set_font("helvetica", "B", 9)
-                self.cell(40, 4, "Invoice No", border=0, new_x="RIGHT", new_y="TOP")
-                self.cell(40, 4, "Invoice Date", border=0, new_x="RIGHT", new_y="TOP")
-                self.cell(0, 4, "Billed To", border=0, new_x="LMARGIN", new_y="NEXT")
-                
-                self.set_font("helvetica", "", 9)
-                self.cell(40, 4, self.inv_no, border=0, new_x="RIGHT", new_y="TOP")
-                self.cell(40, 4, self.inv_date.strftime('%d %b %Y'), border=0, new_x="RIGHT", new_y="TOP")
-                self.cell(0, 4, self.billed_to_name if self.billed_to_name else "Client Name", border=0, new_x="LMARGIN", new_y="NEXT")
-                
-                self.ln(5)
+    pdf_bytes = None
+    try:
+        def generate_pdf():
+            # We need a custom class to handle multi-page headers and footers properly
+            class InvoicePDF(FPDF):
+                def __init__(self, inv_no, inv_date, billed_to_name):
+                    super().__init__()
+                    self.inv_no = inv_no
+                    self.inv_date = inv_date
+                    self.billed_to_name = billed_to_name
+                    
+                def footer(self):
+                    # Go to 35 mm from bottom
+                    self.set_y(-35)
+                    
+                    # Separator Line First (The "Page Break" line)
+                    self.line(self.get_x(), self.get_y(), 210 - self.get_x(), self.get_y())
+                    self.ln(2)
+                    
+                    # --- Page Breaker Info ---
+                    # Left side: Invoice No and Date
+                    # Right side: Billed To
+                    self.set_font("helvetica", "B", 9)
+                    self.cell(40, 4, "Invoice No", border=0, new_x="RIGHT", new_y="TOP")
+                    self.cell(40, 4, "Invoice Date", border=0, new_x="RIGHT", new_y="TOP")
+                    self.cell(0, 4, "Billed To", border=0, new_x="LMARGIN", new_y="NEXT")
+                    
+                    self.set_font("helvetica", "", 9)
+                    self.cell(40, 4, self.inv_no, border=0, new_x="RIGHT", new_y="TOP")
+                    self.cell(40, 4, self.inv_date.strftime('%d %b %Y'), border=0, new_x="RIGHT", new_y="TOP")
+                    self.cell(0, 4, self.billed_to_name if self.billed_to_name else "Client Name", border=0, new_x="LMARGIN", new_y="NEXT")
+                    
+                    self.ln(5)
 
-                # --- Page Number & Disclaimer ---
-                self.set_font("helvetica", "B", 9)
-                self.cell(0, 6, f"Page {self.page_no()} of {{nb}}", align="L", new_x="LMARGIN", new_y="NEXT")
-                
-                self.set_font("helvetica", "", 8)
-                self.set_text_color(128, 128, 128)
-                self.cell(0, 4, "This is an electronically generated document, no signature is required.", align="L", new_x="LMARGIN", new_y="NEXT")
-                self.set_text_color(0, 0, 0)
+                    # --- Page Number & Disclaimer ---
+                    self.set_font("helvetica", "B", 9)
+                    self.cell(0, 6, f"Page {self.page_no()} of {{nb}}", align="L", new_x="LMARGIN", new_y="NEXT")
+                    
+                    self.set_font("helvetica", "", 8)
+                    self.set_text_color(128, 128, 128)
+                    self.cell(0, 4, "This is an electronically generated document, no signature is required.", align="L", new_x="LMARGIN", new_y="NEXT")
+                    self.set_text_color(0, 0, 0)
 
-        pdf = InvoicePDF(invoice_number, invoice_date, to_name)
-        pdf.alias_nb_pages() # Required for {nb} to be replaced with total pages
-        
-        # VERY IMPORTANT: Set the auto page break high enough so the table 
-        # stops drawing BEFORE it crashes into our custom 45mm tall footer.
-        pdf.set_auto_page_break(auto=True, margin=50) 
-        
-        pdf.add_page()
-        
-        # Logo on the Top Right
-        try:
-            req = urllib.request.Request(logo_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response:
-                img_data = response.read()
-                # Place logo on the top right. Page width is ~210mm.
-                pdf.image(io.BytesIO(img_data), x=155, y=10, w=40)
-        except Exception:
-            pass 
-        
-        # Top Header - Left: Invoice Details
-        pdf.set_font("helvetica", "B", 24)
-        pdf.set_y(15)
-        pdf.cell(100, 10, "INVOICE", new_x="LMARGIN", new_y="NEXT", align="L")
-        pdf.ln(5)
-        
-        pdf.set_font("helvetica", "B", 10)
-        pdf.cell(35, 6, "Invoice Number:", new_x="RIGHT", new_y="TOP")
-        pdf.set_font("helvetica", "", 10)
-        pdf.cell(65, 6, f"{invoice_number}", new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.set_font("helvetica", "B", 10)
-        pdf.cell(35, 6, "Invoice Date:", new_x="RIGHT", new_y="TOP")
-        pdf.set_font("helvetica", "", 10)
-        pdf.cell(65, 6, f"{invoice_date.strftime('%d %b %Y')}", new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.set_font("helvetica", "B", 10)
-        pdf.cell(35, 6, "Due Date:", new_x="RIGHT", new_y="TOP")
-        pdf.set_font("helvetica", "", 10)
-        pdf.cell(65, 6, f"{due_date.strftime('%d %b %Y')}", new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.ln(15)
-        
-        # Billed By (Left Side)
-        y_before_address = pdf.get_y()
-        pdf.set_font("helvetica", "B", 12)
-        pdf.cell(100, 6, "Billed By", new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.set_font("helvetica", "B", 10)
-        if billed_by.get('Company Name'):
-            pdf.cell(100, 5, billed_by.get('Company Name', ''), new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.set_font("helvetica", "", 10)
-        if billed_by.get('Address Line 1'):
-            pdf.cell(100, 5, billed_by.get('Address Line 1', ''), new_x="LMARGIN", new_y="NEXT")
-        if billed_by.get('Address Line 2'):
-            pdf.cell(100, 5, billed_by.get('Address Line 2', ''), new_x="LMARGIN", new_y="NEXT")
-        if billed_by.get('GSTIN'):
-            pdf.cell(100, 5, f"GSTIN: {billed_by.get('GSTIN', '')}", new_x="LMARGIN", new_y="NEXT")
-        if billed_by.get('PAN'):
-            pdf.cell(100, 5, f"PAN: {billed_by.get('PAN', '')}", new_x="LMARGIN", new_y="NEXT")
-        if billed_by.get('Phone'):
-            pdf.cell(100, 5, f"Phone: {billed_by.get('Phone', '')}", new_x="LMARGIN", new_y="NEXT")
-        
-        # Billed To (Right Side)
-        # Move up and set right margin for 2-column layout
-        pdf.set_y(y_before_address)
-        pdf.set_left_margin(115)
-        
-        pdf.set_font("helvetica", "B", 12)
-        pdf.cell(0, 6, "Billed To", new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.set_font("helvetica", "B", 10)
-        if to_name:
-            pdf.cell(0, 5, to_name, new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.set_font("helvetica", "", 10)
-        for line in to_address.split('\n'):
-            if line.strip():
-                pdf.cell(0, 5, line.strip(), new_x="LMARGIN", new_y="NEXT")
-        
-        pdf.cell(0, 5, f"State: {to_state}", new_x="LMARGIN", new_y="NEXT")
-        if to_gstin:
-            pdf.cell(0, 5, f"GSTIN: {to_gstin}", new_x="LMARGIN", new_y="NEXT")
-        if to_pan:
-            pdf.cell(0, 5, f"PAN: {to_pan}", new_x="LMARGIN", new_y="NEXT")
-        if to_phone and str(to_phone).strip() != "":
-            pdf.cell(0, 5, f"Phone: {to_phone}", new_x="LMARGIN", new_y="NEXT")
-        
-        # Reset Margin for Table
-        # Make Y coord lower than both columns
-        pdf.set_left_margin(10)
-        pdf.set_y(max(pdf.get_y(), y_before_address + 50) + 10)
-        
-        # Table Header Function
-        def draw_table_header():
+            pdf = InvoicePDF(invoice_number, invoice_date, to_name)
+            pdf.alias_nb_pages() # Required for {nb} to be replaced with total pages
+            
+            # VERY IMPORTANT: Set the auto page break high enough so the table 
+            # stops drawing BEFORE it crashes into our custom 45mm tall footer.
+            pdf.set_auto_page_break(auto=True, margin=50) 
+            
+            pdf.add_page()
+            
+            # Logo on the Top Right
+            try:
+                req = urllib.request.Request(logo_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req) as response:
+                    img_data = response.read()
+                    # Place logo on the top right. Page width is ~210mm.
+                    pdf.image(io.BytesIO(img_data), x=155, y=10, w=40)
+            except Exception:
+                pass 
+            
+            # Top Header - Left: Invoice Details
+            pdf.set_font("helvetica", "B", 24)
+            pdf.set_y(15)
+            pdf.cell(100, 10, "INVOICE", new_x="LMARGIN", new_y="NEXT", align="L")
+            pdf.ln(5)
+            
+            pdf.set_font("helvetica", "B", 10)
+            pdf.cell(35, 6, "Invoice Number:", new_x="RIGHT", new_y="TOP")
+            pdf.set_font("helvetica", "", 10)
+            pdf.cell(65, 6, f"{invoice_number}", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("helvetica", "B", 10)
+            pdf.cell(35, 6, "Invoice Date:", new_x="RIGHT", new_y="TOP")
+            pdf.set_font("helvetica", "", 10)
+            pdf.cell(65, 6, f"{invoice_date.strftime('%d %b %Y')}", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("helvetica", "B", 10)
+            pdf.cell(35, 6, "Due Date:", new_x="RIGHT", new_y="TOP")
+            pdf.set_font("helvetica", "", 10)
+            pdf.cell(65, 6, f"{due_date.strftime('%d %b %Y')}", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.ln(15)
+            
+            # Billed By (Left Side)
+            y_before_address = pdf.get_y()
+            pdf.set_font("helvetica", "B", 12)
+            pdf.cell(100, 6, "Billed By", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("helvetica", "B", 10)
+            if billed_by.get('Company Name'):
+                pdf.cell(100, 5, billed_by.get('Company Name', ''), new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("helvetica", "", 10)
+            if billed_by.get('Address Line 1'):
+                pdf.cell(100, 5, billed_by.get('Address Line 1', ''), new_x="LMARGIN", new_y="NEXT")
+            if billed_by.get('Address Line 2'):
+                pdf.cell(100, 5, billed_by.get('Address Line 2', ''), new_x="LMARGIN", new_y="NEXT")
+            if billed_by.get('GSTIN'):
+                pdf.cell(100, 5, f"GSTIN: {billed_by.get('GSTIN', '')}", new_x="LMARGIN", new_y="NEXT")
+            if billed_by.get('PAN'):
+                pdf.cell(100, 5, f"PAN: {billed_by.get('PAN', '')}", new_x="LMARGIN", new_y="NEXT")
+            if billed_by.get('Phone'):
+                pdf.cell(100, 5, f"Phone: {billed_by.get('Phone', '')}", new_x="LMARGIN", new_y="NEXT")
+            
+            # Billed To (Right Side)
+            # Move up and set right margin for 2-column layout
+            pdf.set_y(y_before_address)
+            pdf.set_left_margin(115)
+            
+            pdf.set_font("helvetica", "B", 12)
+            pdf.cell(0, 6, "Billed To", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("helvetica", "B", 10)
+            if to_name:
+                pdf.cell(0, 5, to_name, new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("helvetica", "", 10)
+            for line in to_address.split('\n'):
+                if line.strip():
+                    pdf.cell(0, 5, line.strip(), new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.cell(0, 5, f"State: {to_state}", new_x="LMARGIN", new_y="NEXT")
+            if to_gstin:
+                pdf.cell(0, 5, f"GSTIN: {to_gstin}", new_x="LMARGIN", new_y="NEXT")
+            if to_pan:
+                pdf.cell(0, 5, f"PAN: {to_pan}", new_x="LMARGIN", new_y="NEXT")
+            if to_phone and str(to_phone).strip() != "":
+                pdf.cell(0, 5, f"Phone: {to_phone}", new_x="LMARGIN", new_y="NEXT")
+            
+            # Reset Margin for Table
+            # Make Y coord lower than both columns
+            pdf.set_left_margin(10)
+            pdf.set_y(max(pdf.get_y(), y_before_address + 50) + 10)
+            
+            # Table Header Function
+            def draw_table_header():
+                pdf.set_font("helvetica", "B", 9)
+                pdf.set_fill_color(240, 240, 240)
+                
+                # Widths: S.No=8, Item=60, GST=10, Rate=17, Qty=10, BaseAmt=20, CGST=15, SGST=15, IGST=20, Total=45/35
+                # Total Width 190.
+                pdf.cell(8, 8, "", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(60, 8, "Item", border=1, new_x="RIGHT", new_y="TOP", fill=True)
+                pdf.cell(10, 8, "GST%", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(17, 8, "Rate", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(10, 8, "Qty", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(20, 8, "Amount", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                
+                if is_igst:
+                    pdf.cell(20, 8, "IGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                    pdf.cell(45, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                else:
+                    pdf.cell(15, 8, "CGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                    pdf.cell(15, 8, "SGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                    pdf.cell(35, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+
+            is_igst = from_state != to_state
+            draw_table_header()
+            
+            # Table Rows
+            pdf.set_font("helvetica", "", 9)
+            for idx1, item1 in enumerate(invoice_items):
+                # Calculate height needed for this row based on product name wrap
+                text_w = 60 # Item column width
+                line_height = 8 # Consistent with original cell height
+                
+                # Use multi_cell with split_only to calculate lines
+                lines = pdf.multi_cell(text_w, line_height, str(item1['product']), border=0, align="L", split_only=True)
+                row_h = max(line_height, len(lines) * line_height)
+                
+                if pdf.will_page_break(row_h):
+                    pdf.add_page()
+                    draw_table_header()
+                    pdf.set_font("helvetica", "", 9)
+
+                # Draw cells
+                curr_x1 = pdf.get_x()
+                curr_y1 = pdf.get_y()
+                
+                # S.No
+                pdf.cell(8, row_h, str(idx1 + 1), border=1, new_x="RIGHT", new_y="TOP", align="C")
+                
+                # Item Name (Multi-line)
+                pdf.multi_cell(60, line_height, str(item1['product']), border=0, align="L", new_x="RIGHT", new_y="TOP")
+                pdf.rect(curr_x1 + 8, curr_y1, 60, row_h)
+                pdf.set_xy(curr_x1 + 68, curr_y1)
+                
+                # Other columns
+                pdf.cell(10, row_h, f"{item1['gst_percent']}%", border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(17, row_h, f"{item1['price']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                pdf.cell(10, row_h, str(item1['qty']), border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(20, row_h, f"{item1['base_total']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                
+                if is_igst:
+                    pdf.cell(20, row_h, f"{item1['igst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                    pdf.cell(45, row_h, f"{item1['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
+                else:
+                    pdf.cell(15, row_h, f"{item1['cgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                    pdf.cell(15, row_h, f"{item1['sgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                    pdf.cell(35, row_h, f"{item1['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
+                    
+            # Total Row inside the table
+            if pdf.will_page_break(8):
+                pdf.add_page()
+                draw_table_header()
+
             pdf.set_font("helvetica", "B", 9)
             pdf.set_fill_color(240, 240, 240)
             
-            # Widths: S.No=8, Item=60, GST=10, Rate=17, Qty=10, BaseAmt=20, CGST=15, SGST=15, IGST=20, Total=45/35
-            # Total Width 190.
-            pdf.cell(8, 8, "", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
-            pdf.cell(60, 8, "Item", border=1, new_x="RIGHT", new_y="TOP", fill=True)
-            pdf.cell(10, 8, "GST%", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
-            pdf.cell(17, 8, "Rate", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-            pdf.cell(10, 8, "Qty", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
-            pdf.cell(20, 8, "Amount", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+            total_qty_sum = df["qty"].sum()
+            pdf.cell(8 + 60 + 10 + 17, 8, "Total", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+            pdf.cell(10, 8, str(total_qty_sum), border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+            pdf.cell(20, 8, f"{subtotal:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
             
             if is_igst:
-                pdf.cell(20, 8, "IGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(45, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                pdf.cell(20, 8, f"{total_igst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(45, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
             else:
-                pdf.cell(15, 8, "CGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(15, 8, "SGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(35, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
-
-        is_igst = from_state != to_state
-        draw_table_header()
-        
-        # Table Rows
-        pdf.set_font("helvetica", "", 9)
-        for idx, item in enumerate(invoice_items):
-            # Calculate height needed for this row based on product name wrap
-            # Get height of item name cell first
-            text_w = 60 # Item column width
-            line_height = 8 # Consistent with original cell height
+                pdf.cell(15, 8, f"{total_cgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(15, 8, f"{total_sgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(35, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                    
+            pdf.ln(5)
             
-            # Use multi_cell with split_only to calculate lines
-            lines = pdf.multi_cell(text_w, line_height, str(item['product']), border=0, align="L", split_only=True)
-            row_h = max(line_height, len(lines) * line_height)
+            # Totals Footer
+            pdf.set_left_margin(120)
+            pdf.set_font("helvetica", "", 10)
+            pdf.cell(30, 6, "Subtotal:", new_x="RIGHT", new_y="TOP", align="R")
+            pdf.cell(40, 6, f"Rs. {subtotal:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
             
-            if pdf.will_page_break(row_h):
-                pdf.add_page()
-                draw_table_header()
-                pdf.set_font("helvetica", "", 9)
-
-            # Draw cells
-            start_x = pdf.get_x()
-            start_y = pdf.get_y()
-            
-            # S.No
-            pdf.cell(8, row_h, str(idx + 1), border=1, new_x="RIGHT", new_y="TOP", align="C")
-            
-            # Item Name (Multi-line)
-            # multi_cell moves to next line by default if not told otherwise, but fpdf2 has better controls
-            curr_x = pdf.get_x()
-            curr_y = pdf.get_y()
-            pdf.multi_cell(60, line_height, str(item['product']), border=1, align="L", new_x="RIGHT", new_y="TOP", max_line_height=line_height)
-            
-            # Since multi_cell might result in a shorter height than row_h if we forced row_h, 
-            # we need to ensure the border covers the full row_h. 
-            # Actually, fpdf2 multi_cell with border=1 will only border the text.
-            # To fix this, we can draw an empty cell over it or use a different approach.
-            # Let's adjust: render multi_cell without border, then draw rect for border.
-            pdf.set_xy(curr_x, curr_y)
-            pdf.multi_cell(60, line_height, str(item['product']), border=0, align="L", new_x="RIGHT", new_y="TOP")
-            pdf.rect(curr_x, curr_y, 60, row_h)
-            pdf.set_xy(curr_x + 60, curr_y)
-            
-            # Other columns
-            pdf.cell(10, row_h, f"{item['gst_percent']}%", border=1, new_x="RIGHT", new_y="TOP", align="C")
-            pdf.cell(17, row_h, f"{item['price']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-            pdf.cell(10, row_h, str(item['qty']), border=1, new_x="RIGHT", new_y="TOP", align="C")
-            pdf.cell(20, row_h, f"{item['base_total']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-            
-            if is_igst:
-                pdf.cell(20, row_h, f"{item['igst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                pdf.cell(45, row_h, f"{item['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
+            if not is_igst:
+                pdf.cell(30, 6, "CGST:", new_x="RIGHT", new_y="TOP", align="R")
+                pdf.cell(40, 6, f"Rs. {total_cgst:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+                pdf.cell(30, 6, "SGST:", new_x="RIGHT", new_y="TOP", align="R")
+                pdf.cell(40, 6, f"Rs. {total_sgst:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
             else:
-                pdf.cell(15, row_h, f"{item['cgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                pdf.cell(15, row_h, f"{item['sgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                pdf.cell(35, row_h, f"{item['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
+                pdf.cell(30, 6, "IGST:", new_x="RIGHT", new_y="TOP", align="R")
+                pdf.cell(40, 6, f"Rs. {total_igst:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
                 
-        # Total Row inside the table
-        if pdf.will_page_break(8):
-            pdf.add_page()
-            draw_table_header()
-
-        pdf.set_font("helvetica", "B", 9)
-        pdf.set_fill_color(240, 240, 240)
-        
-        # Calculate sums for the table row
-        total_qty = df["qty"].sum()
-        
-        # Empty cells for S.No, Item, GST%, Rate
-        # New Widths: S.No=8, Item=60, GST=10, Rate=17, Qty=10, BaseAmt=20
-        pdf.cell(8 + 60 + 10 + 17, 8, "Total", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-        
-        # Totals
-        pdf.cell(10, 8, str(total_qty), border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
-        pdf.cell(20, 8, f"{subtotal:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-        
-        if is_igst:
-            pdf.cell(20, 8, f"{total_igst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-            pdf.cell(45, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
-        else:
-            pdf.cell(15, 8, f"{total_cgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-            pdf.cell(15, 8, f"{total_sgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-            pdf.cell(35, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
-                
-        pdf.ln(5)
-        
-        # Totals Footer
-        pdf.set_left_margin(120)
-        pdf.set_font("helvetica", "", 10)
-        pdf.cell(30, 6, "Subtotal:", new_x="RIGHT", new_y="TOP", align="R")
-        pdf.cell(40, 6, f"Rs. {subtotal:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-        
-        if not is_igst:
-            pdf.cell(30, 6, "CGST:", new_x="RIGHT", new_y="TOP", align="R")
-            pdf.cell(40, 6, f"Rs. {total_cgst:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-            pdf.cell(30, 6, "SGST:", new_x="RIGHT", new_y="TOP", align="R")
-            pdf.cell(40, 6, f"Rs. {total_sgst:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-        else:
-            pdf.cell(30, 6, "IGST:", new_x="RIGHT", new_y="TOP", align="R")
-            pdf.cell(40, 6, f"Rs. {total_igst:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+            pdf.set_font("helvetica", "B", 12)
+            pdf.cell(30, 8, "Grand Total:", new_x="RIGHT", new_y="TOP", align="R")
+            pdf.cell(40, 8, f"Rs. {grand_total:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
             
-        pdf.set_font("helvetica", "B", 12)
-        pdf.cell(30, 8, "Grand Total:", new_x="RIGHT", new_y="TOP", align="R")
-        pdf.cell(40, 8, f"Rs. {grand_total:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-        
-        pdf.set_left_margin(10)
-        return bytes(pdf.output())
+            pdf.set_left_margin(10)
+            return bytes(pdf.output())
+
+        # Call the function
+        pdf_bytes = generate_pdf()
+    except Exception as e:
+        st.error(f"❌ PDF Generation Error: {str(e)}")
+        st.info("Check your Streamlit Cloud logs or Ensure 'fpdf2' is in requirements.txt.")
 
     action1, action2, action3 = st.columns(3)
     
