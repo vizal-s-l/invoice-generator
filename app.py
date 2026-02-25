@@ -30,37 +30,37 @@ def get_gcp_creds():
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Invoice Generator", page_icon="🧾", layout="wide")
 
-# --- AUTHENTICATION ---
-def check_password():
-    def password_entered():
-        if "password" in st.session_state and "password" in st.secrets:
-            if st.session_state["password"] == st.secrets["password"]:
-                st.session_state["password_correct"] = True
-                del st.session_state["password"]
-            else:
-                st.session_state["password_correct"] = False
-        else:
-             st.session_state["password_correct"] = True
+# # --- AUTHENTICATION ---
+# def check_password():
+#     def password_entered():
+#         if "password" in st.session_state and "password" in st.secrets:
+#             if st.session_state["password"] == st.secrets["password"]:
+#                 st.session_state["password_correct"] = True
+#                 del st.session_state["password"]
+#             else:
+#                 st.session_state["password_correct"] = False
+#         else:
+#              st.session_state["password_correct"] = True
 
-    if "password_correct" not in st.session_state:
-        st.text_input("Please enter the password to access the Invoice Generator", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Please enter the password to access the Invoice Generator", type="password", on_change=password_entered, key="password")
-        st.error("😕 Password incorrect")
-        return False
-    else:
-        return True
+#     if "password_correct" not in st.session_state:
+#         st.text_input("Please enter the password to access the Invoice Generator", type="password", on_change=password_entered, key="password")
+#         return False
+#     elif not st.session_state["password_correct"]:
+#         st.text_input("Please enter the password to access the Invoice Generator", type="password", on_change=password_entered, key="password")
+#         st.error("😕 Password incorrect")
+#         return False
+#     else:
+#         return True
 
-is_authenticated = True
-try:
-    if st.secrets.get("password"):
-        is_authenticated = check_password()
-except Exception:
-    pass
+# is_authenticated = True
+# try:
+#     if st.secrets.get("password"):
+#         is_authenticated = check_password()
+# except Exception:
+#     pass
 
-if not is_authenticated:
-    st.stop()
+# if not is_authenticated:
+#     st.stop()
 
 
 # --- APP START ---
@@ -740,4 +740,5 @@ if invoice_items:
             st.rerun()
 else:
     st.info("Please enter at least one product to see the invoice summary.")
+
 
