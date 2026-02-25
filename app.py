@@ -262,14 +262,15 @@ elif client_selection in MOCK_CLIENTS:
     st.write(f"**State:** {client['state']}")
     st.write(f"**GSTIN:** {client['gstin']}")
     st.write(f"**PAN:** {client['pan']}")
-    st.write(f"**Phone:** {client['phone']}")
+    if client['phone'] and str(client['phone']).strip() != "":
+        st.write(f"**Phone:** {client['phone']}")
     # Set state variables
     to_name = client['name']
     to_address = client['address']
     to_state = client['state']
     to_gstin = client['gstin']
     to_pan = client['pan']
-    to_phone = client['phone']
+    to_phone = client['phone'] if client['phone'] and str(client['phone']).strip() != "" else ""
 else:
     to_name = ""
     to_address = ""
@@ -512,7 +513,7 @@ if invoice_items:
             pdf.cell(0, 5, f"GSTIN: {to_gstin}", new_x="LMARGIN", new_y="NEXT")
         if to_pan:
             pdf.cell(0, 5, f"PAN: {to_pan}", new_x="LMARGIN", new_y="NEXT")
-        if to_phone:
+        if to_phone and str(to_phone).strip() != "":
             pdf.cell(0, 5, f"Phone: {to_phone}", new_x="LMARGIN", new_y="NEXT")
         
         # Reset Margin for Table
@@ -739,3 +740,4 @@ if invoice_items:
             st.rerun()
 else:
     st.info("Please enter at least one product to see the invoice summary.")
+
