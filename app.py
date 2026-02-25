@@ -340,9 +340,12 @@ st.divider()
 # --- SUMMARY SECTION ---
 st.subheader("Invoice Summary")
 
+# Initialize totals and variables with defaults to avoid NameErrors
+subtotal, total_cgst, total_sgst, total_igst, grand_total = 0.0, 0.0, 0.0, 0.0, 0.0
+pdf_bytes = None
+df = pd.DataFrame(invoice_items) if invoice_items else pd.DataFrame(columns=["product", "price", "qty", "base_total", "total", "cgst", "sgst", "igst"])
+
 if invoice_items:
-    df = pd.DataFrame(invoice_items)
-    
     subtotal = df["base_total"].sum()
     total_cgst = df["cgst"].sum()
     total_sgst = df["sgst"].sum()
@@ -620,8 +623,6 @@ if invoice_items:
         st.info("Check your Streamlit Cloud logs or Ensure 'fpdf2' is in requirements.txt.")
 
     action1, action2, action3 = st.columns(3)
-    
-    pdf_bytes = generate_pdf()
     
     with action1:
         st.download_button(
