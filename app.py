@@ -673,11 +673,26 @@ if invoice_items:
         if st.button("💾 Save & Download", use_container_width=True):
             try:
                 creds = get_gcp_creds()
+                # 1. Upload to Google Drive First
+                drive_link = ""
+                try:
+                    drive_service = build('drive', 'v3', credentials=creds)
+                    file_metadata = {
+                        'name': f"{invoice_number}.pdf",
+                        'parents': ['1lDGSAc6cyNP-nZuUZFRPmj0SDfdpLpy6']
+                    }
+                    media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype='application/pdf')
+                    drive_file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+                    drive_link = drive_file.get('webViewLink', '')
+                except Exception as drive_e:
+                    st.warning(f"Failed to upload to Drive: {str(drive_e)}")
+
+                # 2. Save to Google Sheets
                 client = gspread.authorize(creds)
                 spreadsheet = client.open_by_key('1msnl_ZYZTvl1j45mjPI9FvzXDphJNLsOPfhyNxanK5I')
                 invoices_sheet = spreadsheet.worksheet('Invoices')
                 
-                # S.No, Invoice No, Date, Due Date, Client Name, Subtotal, CGST, SGST, IGST, Grand Total
+                # S.No, Invoice No, Date, Due Date, Client Name, Subtotal, CGST, SGST, IGST, Grand Total, Drive Link
                 s_no = len(invoices_sheet.get_all_values())  # Rows including header, so len is next S.no sequence
                 
                 row_data = [
@@ -690,31 +705,24 @@ if invoice_items:
                     float(round(total_cgst, 2)),
                     float(round(total_sgst, 2)),
                     float(round(total_igst, 2)),
-                    float(round(grand_total, 2))
+                    float(round(grand_total, 2)),
+                    drive_link
                 ]
                 invoices_sheet.append_row(row_data)
                 
                 # Auto increment local tracker after successful save
                 st.session_state.invoice_num_override = get_next_alpha_numeric(invoice_number)
                 
-                # Trigger Auto-Download Hack
+                # 3. Trigger Auto-Download Hack
                 import base64
                 b64 = base64.b64encode(pdf_bytes).decode()
                 href = f'<a id="auto-dl" href="data:application/pdf;base64,{b64}" download="{invoice_number}.pdf"></a><script>document.getElementById("auto-dl").click();</script>'
                 st.components.v1.html(href, height=0)
                 
-                # Upload to Google Drive
-                try:
-                    drive_service = build('drive', 'v3', credentials=creds)
-                    file_metadata = {
-                        'name': f"{invoice_number}.pdf",
-                        'parents': ['1lDGSAc6cyNP-nZuUZFRPmj0SDfdpLpy6']
-                    }
-                    media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype='application/pdf')
-                    drive_file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-                    st.success(f"Invoice successfully saved, downloaded, and uploaded to Drive! (ID: {drive_file.get('id')})")
-                except Exception as drive_e:
-                    st.warning(f"Saved and downloaded, but failed to upload to Drive: {str(drive_e)}")
+                if drive_link:
+                    st.success(f"Invoice successfully saved, downloaded, and uploaded to Drive! [View in Drive]({drive_link})")
+                else:    
+                    st.success("Invoice successfully saved to sheets and downloaded! (Drive upload bypassed)")
                     
             except Exception as e:
                 st.error(f"Failed to save invoice: {str(e)}")
