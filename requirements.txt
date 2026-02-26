@@ -3,3 +3,4 @@ pandas
 fpdf2
 gspread
 oauth2client
+google-api-python-client
