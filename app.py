@@ -6,6 +6,8 @@ import urllib.request
 from fpdf import FPDF
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 # Helper to load creds from Streamlit Secrets
 def get_gcp_creds():
@@ -114,14 +116,31 @@ billed_by = gs_data['billed_by']
 MOCK_CLIENTS = gs_data['clients']
 MOCK_PRODUCTS = gs_data['products']
 
-# --- CALLBACK FOR PRODUCT SYNC ---
+# --- CALLBACK FOR DISCOUNT & PRODUCT SYNC ---
+def on_discount_change():
+    # Only need to trigger a rerun, Streamlit handles the state
+    pass
+
 def on_product_change(idx):
     selected = st.session_state[f"prod_select_{idx}"]
     if selected in MOCK_PRODUCTS:
         st.session_state[f"prod_name_{idx}"] = MOCK_PRODUCTS[selected]["name"] if selected != "Select Product" else ""
         st.session_state[f"hsn_{idx}"] = MOCK_PRODUCTS[selected]["hsn"]
-        st.session_state[f"price_{idx}"] = float(MOCK_PRODUCTS[selected]["price"])
         st.session_state[f"gst_{idx}"] = int(MOCK_PRODUCTS[selected]["gst"])
+        
+        sheet_price = float(MOCK_PRODUCTS[selected]["price"])
+        gst_percent = int(MOCK_PRODUCTS[selected]["gst"])
+        
+        # Calculate original GST and base price
+        gst_amount = sheet_price * (gst_percent / 100.0)
+        base_price = sheet_price - gst_amount
+        
+        # We store the *original* base price from the sheet.
+        # The discount will be applied dynamically in the main rendering loop
+        st.session_state[f"original_base_price_{idx}"] = base_price
+        st.session_state[f"original_gst_amt_{idx}"] = gst_amount
+        
+        st.session_state[f"price_{idx}"] = round(base_price, 2)
 
 CLIENT_OPTIONS = ["Select Client", "Create New Client"] + list(MOCK_CLIENTS.keys())
 STATES = [
@@ -260,6 +279,21 @@ else:
 
 st.divider()
 
+# --- DISCOUNT ---
+col_d1, col_d2 = st.columns([1, 2])
+with col_d1:
+    st.number_input(
+        "Discount %", 
+        min_value=0.0, 
+        max_value=100.0, 
+        step=1.0, 
+        value=0.0, 
+        key="global_discount_input",
+        on_change=on_discount_change
+    )
+
+st.divider()
+
 # --- INVOICE ITEMS SECTION ---
 st.subheader("Invoice Items")
 
@@ -295,6 +329,17 @@ for i in range(st.session_state.item_rows):
         # Ensure price is a float in session state if not already set
         if f"price_{i}" not in st.session_state:
             st.session_state[f"price_{i}"] = 0.0
+            
+        # Apply discount dynamically here just for display
+        original_base = st.session_state.get(f"original_base_price_{i}", 0.0)
+        discount_val = st.session_state.get("global_discount_input", 0.0)
+        if original_base > 0:
+            if discount_val > 0:
+                discounted_rate = original_base * (1.0 - (discount_val / 100.0))
+            else:
+                discounted_rate = original_base
+            st.session_state[f"price_{i}"] = round(discounted_rate, 2)
+            
         base_price = st.number_input("Unit Rate", min_value=0.0, step=100.0, key=f"price_{i}")
     with c5:
         if f"gst_{i}" not in st.session_state:
@@ -303,14 +348,17 @@ for i in range(st.session_state.item_rows):
         
     row_total_base = base_price * quantity
     
+    # GST is fixed based on the original product sheet price, not the discounted price
+    original_gst = st.session_state.get(f"original_gst_amt_{i}", 0.0) * quantity
+    
     if from_state == "Karnataka" and to_state == "Karnataka":
-        cgst_amt = (row_total_base * (gst_percent / 2)) / 100
-        sgst_amt = (row_total_base * (gst_percent / 2)) / 100
+        cgst_amt = original_gst / 2
+        sgst_amt = original_gst / 2
         igst_amt = 0
     else:
         cgst_amt = 0
         sgst_amt = 0
-        igst_amt = (row_total_base * gst_percent) / 100
+        igst_amt = original_gst
         
     row_total_final = row_total_base + cgst_amt + sgst_amt + igst_amt
     
@@ -622,19 +670,9 @@ if invoice_items:
         st.error(f"❌ PDF Generation Error: {str(e)}")
         st.info("Check your Streamlit Cloud logs or Ensure 'fpdf2' is in requirements.txt.")
 
-    action1, action2, action3 = st.columns(3)
+    action1, action2 = st.columns(2)
     
     with action1:
-        st.download_button(
-            label="📄 Just Download",
-            data=pdf_bytes,
-            file_name=f"{invoice_number}.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True
-        )
-        
-    with action2:
         # Instead of a button that triggers a download, we use a form to handle state
         # But Streamlit doesn't allow download_button inside a form execution natively easily
         # So we use a st.button that sets a flag in session state to show a success message
@@ -671,13 +709,24 @@ if invoice_items:
                 href = f'<a id="auto-dl" href="data:application/pdf;base64,{b64}" download="{invoice_number}.pdf"></a><script>document.getElementById("auto-dl").click();</script>'
                 st.components.v1.html(href, height=0)
                 
-                st.success("Invoice successfully saved and downloaded!")
+                # Upload to Google Drive
+                try:
+                    drive_service = build('drive', 'v3', credentials=creds)
+                    file_metadata = {
+                        'name': f"{invoice_number}.pdf",
+                        'parents': ['1lDGSAc6cyNP-nZuUZFRPmj0SDfdpLpy6']
+                    }
+                    media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype='application/pdf')
+                    drive_file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                    st.success(f"Invoice successfully saved, downloaded, and uploaded to Drive! (ID: {drive_file.get('id')})")
+                except Exception as drive_e:
+                    st.warning(f"Saved and downloaded, but failed to upload to Drive: {str(drive_e)}")
+                    
             except Exception as e:
                 st.error(f"Failed to save invoice: {str(e)}")
                 
 
-                
-    with action3:
+    with action2:
         if st.button("➕ Create New Invoice", use_container_width=True):
             # Clear all item rows
             st.session_state.item_rows = 1
