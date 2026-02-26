@@ -131,16 +131,13 @@ def on_product_change(idx):
         sheet_price = float(MOCK_PRODUCTS[selected]["price"])
         gst_percent = int(MOCK_PRODUCTS[selected]["gst"])
         
-        # Calculate original GST and base price
-        gst_amount = sheet_price * (gst_percent / 100.0)
-        base_price = sheet_price - gst_amount
-        
-        # We store the *original* base price from the sheet.
+        # We store the *original* sheet price.
         # The discount will be applied dynamically in the main rendering loop
-        st.session_state[f"original_base_price_{idx}"] = base_price
-        st.session_state[f"original_gst_amt_{idx}"] = gst_amount
+        st.session_state[f"original_sheet_price_{idx}"] = sheet_price
         
-        st.session_state[f"price_{idx}"] = round(base_price, 2)
+        initial_rate = sheet_price / (1.0 + (gst_percent / 100.0))
+        st.session_state[f"price_{idx}"] = round(initial_rate, 2)
+
 
 CLIENT_OPTIONS = ["Select Client", "Create New Client"] + list(MOCK_CLIENTS.keys())
 STATES = [
@@ -331,13 +328,13 @@ for i in range(st.session_state.item_rows):
             st.session_state[f"price_{i}"] = 0.0
             
         # Apply discount dynamically here just for display
-        original_base = st.session_state.get(f"original_base_price_{i}", 0.0)
+        original_sheet_price = st.session_state.get(f"original_sheet_price_{i}", 0.0)
         discount_val = st.session_state.get("global_discount_input", 0.0)
-        if original_base > 0:
-            if discount_val > 0:
-                discounted_rate = original_base * (1.0 - (discount_val / 100.0))
-            else:
-                discounted_rate = original_base
+        current_gst_percent = st.session_state.get(f"gst_{i}", 18)
+        
+        if original_sheet_price > 0:
+            discounted_sheet_price = original_sheet_price * ((100.0 - discount_val) / 100.0)
+            discounted_rate = discounted_sheet_price / (1.0 + (current_gst_percent / 100.0))
             st.session_state[f"price_{i}"] = round(discounted_rate, 2)
             
         base_price = st.number_input("Unit Rate", min_value=0.0, step=100.0, key=f"price_{i}")
@@ -348,17 +345,14 @@ for i in range(st.session_state.item_rows):
         
     row_total_base = base_price * quantity
     
-    # GST is fixed based on the original product sheet price, not the discounted price
-    original_gst = st.session_state.get(f"original_gst_amt_{i}", 0.0) * quantity
-    
     if from_state == "Karnataka" and to_state == "Karnataka":
-        cgst_amt = original_gst / 2
-        sgst_amt = original_gst / 2
+        cgst_amt = (row_total_base * (gst_percent / 2.0)) / 100.0
+        sgst_amt = (row_total_base * (gst_percent / 2.0)) / 100.0
         igst_amt = 0
     else:
         cgst_amt = 0
         sgst_amt = 0
-        igst_amt = original_gst
+        igst_amt = (row_total_base * gst_percent) / 100.0
         
     row_total_final = row_total_base + cgst_amt + sgst_amt + igst_amt
     
