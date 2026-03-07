@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import datetime
@@ -481,9 +482,15 @@ if invoice_items:
             def clean_text(t):
                 if t is None: return ""
                 t = str(t)
+                # Specific character replacements
                 t = t.replace('\u20b9', 'Rs.').replace('\u2018', "'").replace('\u2019', "'")
                 t = t.replace('\u201c', '"').replace('\u201d', '"').replace('\u2013', '-')
                 t = t.replace('\u2014', '-').replace('\u00a0', ' ').replace('\u200b', '')
+                
+                # Strip bidirectional/isolate formatting characters that Helvetica doesn't support
+                for char in ['\u2066', '\u2067', '\u2068', '\u2069', '\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e']:
+                    t = t.replace(char, '')
+                    
                 return t.encode('latin-1', 'replace').decode('latin-1')
 
             # We need a custom class to handle multi-page headers and footers properly
@@ -608,11 +615,11 @@ if invoice_items:
             
             pdf.cell(0, 5, clean_text(f"State: {to_state}"), new_x="LMARGIN", new_y="NEXT")
             if to_gstin:
-                pdf.cell(0, 5, f"GSTIN: {to_gstin}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 5, clean_text(f"GSTIN: {to_gstin}"), new_x="LMARGIN", new_y="NEXT")
             if to_pan:
-                pdf.cell(0, 5, f"PAN: {to_pan}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 5, clean_text(f"PAN: {to_pan}"), new_x="LMARGIN", new_y="NEXT")
             if to_phone and str(to_phone).strip() != "":
-                pdf.cell(0, 5, f"Phone: {to_phone}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 5, clean_text(f"Phone: {to_phone}"), new_x="LMARGIN", new_y="NEXT")
             
             # Reset Margin for Table
             # Make Y coord lower than both columns
