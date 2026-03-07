@@ -82,25 +82,50 @@ def get_google_sheets_data():
             
         # Products
         try:
-            products_records = spreadsheet.worksheet('Products').get_all_records()
+            products_sheet = spreadsheet.worksheet('Products')
+            all_values = products_sheet.get_all_values()
+            
+            if len(all_values) > 1:
+                headers = all_values[0]
+                products_records = [dict(zip(headers, row)) for row in all_values[1:]]
+            else:
+                products_records = []
+
             if products_records:
-                data['products'] = {"Select Product": {"hsn": "", "price": 0, "gst": 18, "name": "Select Product"}}
+                data['products'] = {"Select Product": {"hsn": "", "price": 0, "mrp": 0, "gst": 18, "name": "Select Product"}}
                 for row in products_records:
-                    if row.get('Product Name'):
+                    if row.get('Product Name') and str(row.get('Product Name')).strip():
+                        # Extract price carefully
                         try:
-                            price_val = float(str(row.get('Price', 0)).replace(',', ''))
-                        except ValueError:
+                            price_raw = str(row.get('Price', 0))
+                            if not price_raw.strip(): price_raw = "0"
+                            price_val = float(price_raw.replace(',', ''))
+                        except Exception:
                             price_val = 0.0
                             
+                        # Extract MRP carefully, defaulting to price if missing
                         try:
-                            gst_val = int(str(row.get('GST %', 18)).replace('%', ''))
-                        except ValueError:
+                            mrp_raw = str(row.get('MRP', ''))
+                            if mrp_raw.strip():
+                                mrp_val = float(mrp_raw.replace(',', ''))
+                            else:
+                                mrp_val = price_val
+                        except Exception:
+                            mrp_val = price_val
+                            
+                        # Extract GST carefully
+                        try:
+                            gst_raw = str(row.get('GST %', 18))
+                            if not gst_raw.strip(): gst_raw = "18"
+                            gst_val = int(gst_raw.replace('%', ''))
+                        except Exception:
                             gst_val = 18
                             
                         data['products'][row.get('Product Name')] = {
                             "name": row.get('Product Name', ''),
                             "hsn": str(row.get('HSN Code', '')),
                             "price": price_val,
+                            "mrp": mrp_val,
                             "gst": gst_val
                         }
         except Exception as e:
@@ -118,8 +143,13 @@ MOCK_PRODUCTS = gs_data['products']
 
 # --- CALLBACK FOR DISCOUNT & PRODUCT SYNC ---
 def on_discount_change():
-    # Only need to trigger a rerun, Streamlit handles the state
-    pass
+    global_val = st.session_state.get("global_discount_input", 0.0)
+    if 'item_rows' in st.session_state:
+        for i in range(st.session_state.item_rows):
+            if f"ind_discount_{i}" in st.session_state:
+                st.session_state[f"ind_discount_{i}"] = global_val
+            # Reset tracking so the loop knows it was forced to change
+            st.session_state[f"last_discount_{i}"] = None
 
 def on_product_change(idx):
     selected = st.session_state[f"prod_select_{idx}"]
@@ -129,14 +159,45 @@ def on_product_change(idx):
         st.session_state[f"gst_{idx}"] = int(MOCK_PRODUCTS[selected]["gst"])
         
         sheet_price = float(MOCK_PRODUCTS[selected]["price"])
+        sheet_mrp = float(MOCK_PRODUCTS[selected].get("mrp", sheet_price))
         gst_percent = int(MOCK_PRODUCTS[selected]["gst"])
         
-        # We store the *original* sheet price.
-        # The discount will be applied dynamically in the main rendering loop
         st.session_state[f"original_sheet_price_{idx}"] = sheet_price
+        st.session_state[f"mrp_{idx}"] = sheet_mrp
+        st.session_state[f"ind_discount_{idx}"] = st.session_state.get("global_discount_input", 0.0)
         
         initial_rate = sheet_price / (1.0 + (gst_percent / 100.0))
         st.session_state[f"price_{idx}"] = round(initial_rate, 2)
+        
+def on_disc_change(idx):
+    # When discount changes, recalculate price
+    original = st.session_state.get(f"original_sheet_price_{idx}", 0.0)
+    current_gst = st.session_state.get(f"gst_{idx}", 18)
+    disc = st.session_state.get(f"ind_discount_{idx}", 0.0)
+    if original > 0:
+        disc_sheet_price = original * ((100.0 - disc) / 100.0)
+        new_rate = disc_sheet_price / (1.0 + (current_gst / 100.0))
+        st.session_state[f"price_{idx}"] = round(new_rate, 2)
+
+def on_price_change(idx):
+    # When price changes, recalculate discount
+    original = st.session_state.get(f"original_sheet_price_{idx}", 0.0)
+    current_gst = st.session_state.get(f"gst_{idx}", 18)
+    new_price = st.session_state.get(f"price_{idx}", 0.0)
+    
+    if original > 0:
+        # Reconstruct the price including GST (what it would be on the sheet)
+        implied_sheet_price = new_price * (1.0 + (current_gst / 100.0))
+        
+        # Calculate what percentage this is of the original price
+        ratio = implied_sheet_price / original
+        calc_disc = 100.0 - (ratio * 100.0)
+        
+        # Cap limits
+        if calc_disc < 0: calc_disc = 0.0
+        if calc_disc > 100.0: calc_disc = 100.0
+        
+        st.session_state[f"ind_discount_{idx}"] = round(calc_disc, 2)
 
 
 CLIENT_OPTIONS = ["Select Client", "Create New Client"] + list(MOCK_CLIENTS.keys())
@@ -308,7 +369,7 @@ invoice_items = []
 
 for i in range(st.session_state.item_rows):
     st.write(f"**Item {i+1}**")
-    c1, c1b, c2, c3, c4, c5 = st.columns([1.5, 1.5, 1, 1, 1, 1])
+    c1, c1b, c2, c2b, c3, c3b, c4, c5 = st.columns([1.5, 1.5, 0.8, 0.8, 0.7, 0.8, 1, 0.8])
     
     with c1:
         # User selects from dropdown
@@ -320,24 +381,25 @@ for i in range(st.session_state.item_rows):
     
     with c2:
         hsn_code = st.text_input("HSN", key=f"hsn_{i}")
+    with c2b:
+        if f"mrp_{i}" not in st.session_state:
+            st.session_state[f"mrp_{i}"] = 0
+            
+        # Read the current float mrp from session state, display it as int via step/format
+        # Streamlit number_input handles float -> int conversion for UI if step is int and format is %d
+        current_mrp = int(st.session_state[f"mrp_{i}"])
+        mrp_val = st.number_input("MRP", min_value=0, step=1, key=f"mrp_{i}", value=current_mrp)
     with c3:
         quantity = st.number_input("Qty", min_value=1, value=1, step=1, key=f"qty_{i}")
+    with c3b:
+        if f"ind_discount_{i}" not in st.session_state:
+            st.session_state[f"ind_discount_{i}"] = st.session_state.get("global_discount_input", 0.0)
+        ind_discount = st.number_input("Disc %", min_value=0.0, max_value=100.0, step=1.0, key=f"ind_discount_{i}", on_change=on_disc_change, args=(i,))
     with c4:
-        # Ensure price is a float in session state if not already set
         if f"price_{i}" not in st.session_state:
             st.session_state[f"price_{i}"] = 0.0
             
-        # Apply discount dynamically here just for display
-        original_sheet_price = st.session_state.get(f"original_sheet_price_{i}", 0.0)
-        discount_val = st.session_state.get("global_discount_input", 0.0)
-        current_gst_percent = st.session_state.get(f"gst_{i}", 18)
-        
-        if original_sheet_price > 0:
-            discounted_sheet_price = original_sheet_price * ((100.0 - discount_val) / 100.0)
-            discounted_rate = discounted_sheet_price / (1.0 + (current_gst_percent / 100.0))
-            st.session_state[f"price_{i}"] = round(discounted_rate, 2)
-            
-        base_price = st.number_input("Unit Rate", min_value=0.0, step=100.0, key=f"price_{i}")
+        base_price = st.number_input("Unit Rate", min_value=0.0, step=100.0, key=f"price_{i}", on_change=on_price_change, args=(i,))
     with c5:
         if f"gst_{i}" not in st.session_state:
             st.session_state[f"gst_{i}"] = 18
@@ -360,6 +422,8 @@ for i in range(st.session_state.item_rows):
         invoice_items.append({
             "product": product_name,
             "hsn": hsn_code,
+            "mrp": mrp_val,
+            "disc_percent": float(ind_discount),
             "gst_percent": int(gst_percent),
             "qty": quantity,
             "price": base_price,
@@ -395,7 +459,7 @@ if invoice_items:
     grand_total = df["total"].sum()
     
     # Simple display
-    st.dataframe(df[["product", "price", "qty", "base_total", "total"]], use_container_width=True)
+    st.dataframe(df[["product", "price", "qty", "base_total", "total"]])
     
     col1_total, col2_total = st.columns([2, 1])
     with col2_total:
@@ -551,22 +615,24 @@ if invoice_items:
                 pdf.set_font("helvetica", "B", 9)
                 pdf.set_fill_color(240, 240, 240)
                 
-                # Widths: S.No=8, Item=60, GST=10, Rate=17, Qty=10, BaseAmt=20, CGST=15, SGST=15, IGST=20, Total=45/35
+                # Widths: S.No=7, Item=44, HSN=15, MRP=11, Disc=8, GST=9, Rate=14, Qty=9, BaseAmt=20, CGST=18, SGST=18, IGST=36, Total=25/7
                 # Total Width 190.
-                pdf.cell(8, 8, "", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
-                pdf.cell(60, 8, "Item", border=1, new_x="RIGHT", new_y="TOP", fill=True)
-                pdf.cell(10, 8, "GST%", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
-                pdf.cell(17, 8, "Rate", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(10, 8, "Qty", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(7, 8, "", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(44, 8, "Item", border=1, new_x="RIGHT", new_y="TOP", fill=True)
+                pdf.cell(15, 8, "HSN", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(11, 8, "MRP", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(9, 8, "GST%", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+                pdf.cell(14, 8, "Rate", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(9, 8, "Qty", border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
                 pdf.cell(20, 8, "Amount", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
                 
                 if is_igst:
-                    pdf.cell(20, 8, "IGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                    pdf.cell(45, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                    pdf.cell(36, 8, "IGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                    pdf.cell(25, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
                 else:
-                    pdf.cell(15, 8, "CGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                    pdf.cell(15, 8, "SGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                    pdf.cell(35, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                    pdf.cell(18, 8, "CGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                    pdf.cell(18, 8, "SGST", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                    pdf.cell(25, 8, "Total", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
 
             is_igst = from_state != to_state
             draw_table_header()
@@ -574,13 +640,14 @@ if invoice_items:
             # Table Rows
             pdf.set_font("helvetica", "", 9)
             for idx1, item1 in enumerate(invoice_items):
-                # Calculate height needed for this row based on product name wrap
-                text_w = 60 # Item column width
-                line_height = 8 # Consistent with original cell height
+                text_w = 44 # Item column width
+                text_lh = 4 # Less space between lines
+                min_row_h = 8
                 
-                # Use multi_cell with split_only to calculate lines
-                lines = pdf.multi_cell(text_w, line_height, str(item1['product']), border=0, align="L", split_only=True)
-                row_h = max(line_height, len(lines) * line_height)
+                # Use multi_cell with dry_run to calculate lines instead of deprecated split_only
+                lines = pdf.multi_cell(text_w, text_lh, str(item1['product']), border=0, align="L", dry_run=True, output="LINES")
+                required_h = len(lines) * text_lh
+                row_h = max(min_row_h, required_h)
                 
                 if pdf.will_page_break(row_h):
                     pdf.add_page()
@@ -592,26 +659,30 @@ if invoice_items:
                 curr_y1 = pdf.get_y()
                 
                 # S.No
-                pdf.cell(8, row_h, str(idx1 + 1), border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(7, row_h, str(idx1 + 1), border=1, new_x="RIGHT", new_y="TOP", align="C")
                 
-                # Item Name (Multi-line)
-                pdf.multi_cell(60, line_height, str(item1['product']), border=0, align="L", new_x="RIGHT", new_y="TOP")
-                pdf.rect(curr_x1 + 8, curr_y1, 60, row_h)
-                pdf.set_xy(curr_x1 + 68, curr_y1)
+                # Item Name (Multi-line) centered vertically
+                y_offset = (row_h - required_h) / 2
+                pdf.set_xy(curr_x1 + 7, curr_y1 + y_offset)
+                pdf.multi_cell(text_w, text_lh, str(item1['product']), border=0, align="L", new_x="RIGHT", new_y="TOP")
+                pdf.rect(curr_x1 + 7, curr_y1, text_w, row_h)
+                pdf.set_xy(curr_x1 + 7 + text_w, curr_y1)
                 
                 # Other columns
-                pdf.cell(10, row_h, f"{item1['gst_percent']}%", border=1, new_x="RIGHT", new_y="TOP", align="C")
-                pdf.cell(17, row_h, f"{item1['price']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                pdf.cell(10, row_h, str(item1['qty']), border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(15, row_h, str(item1.get('hsn', '')), border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(11, row_h, f"{int(item1.get('mrp', 0))}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                pdf.cell(9, row_h, f"{item1['gst_percent']}%", border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(14, row_h, f"{item1['price']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                pdf.cell(9, row_h, str(item1['qty']), border=1, new_x="RIGHT", new_y="TOP", align="C")
                 pdf.cell(20, row_h, f"{item1['base_total']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
                 
                 if is_igst:
-                    pdf.cell(20, row_h, f"{item1['igst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                    pdf.cell(45, row_h, f"{item1['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
+                    pdf.cell(36, row_h, f"{item1['igst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                    pdf.cell(25, row_h, f"{item1['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
                 else:
-                    pdf.cell(15, row_h, f"{item1['cgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                    pdf.cell(15, row_h, f"{item1['sgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
-                    pdf.cell(35, row_h, f"{item1['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
+                    pdf.cell(18, row_h, f"{item1['cgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                    pdf.cell(18, row_h, f"{item1['sgst']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
+                    pdf.cell(25, row_h, f"{item1['total']:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R")
                     
             # Total Row inside the table
             if pdf.will_page_break(8):
@@ -622,17 +693,17 @@ if invoice_items:
             pdf.set_fill_color(240, 240, 240)
             
             total_qty_sum = df["qty"].sum()
-            pdf.cell(8 + 60 + 10 + 17, 8, "Total", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-            pdf.cell(10, 8, str(total_qty_sum), border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
+            pdf.cell(7 + 44 + 15 + 11 + 9 + 14, 8, "Total", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+            pdf.cell(9, 8, str(total_qty_sum), border=1, new_x="RIGHT", new_y="TOP", align="C", fill=True)
             pdf.cell(20, 8, f"{subtotal:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
             
             if is_igst:
-                pdf.cell(20, 8, f"{total_igst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(45, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                pdf.cell(36, 8, f"{total_igst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(25, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
             else:
-                pdf.cell(15, 8, f"{total_cgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(15, 8, f"{total_sgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
-                pdf.cell(35, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
+                pdf.cell(18, 8, f"{total_cgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(18, 8, f"{total_sgst:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R", fill=True)
+                pdf.cell(25, 8, f"{grand_total:,.2f}", border=1, new_x="LMARGIN", new_y="NEXT", align="R", fill=True)
                     
             pdf.ln(5)
             
@@ -670,7 +741,7 @@ if invoice_items:
         # Instead of a button that triggers a download, we use a form to handle state
         # But Streamlit doesn't allow download_button inside a form execution natively easily
         # So we use a st.button that sets a flag in session state to show a success message
-        if st.button("💾 Save & Download", use_container_width=True):
+        if st.button("💾 Save & Download"):
             try:
                 creds = get_gcp_creds()
                 # 1. Upload to Google Drive First
@@ -729,7 +800,7 @@ if invoice_items:
                 
 
     with action2:
-        if st.button("➕ Create New Invoice", use_container_width=True):
+        if st.button("➕ Create New Invoice"):
             # Clear all item rows
             st.session_state.item_rows = 1
             
@@ -746,8 +817,8 @@ if invoice_items:
             # Reset product selection keys based on however many lines they had
             for i in range(100):
                 keys_to_delete.extend([
-                    f"prod_select_{i}", f"prod_name_{i}", f"hsn_{i}", 
-                    f"qty_{i}", f"price_{i}", f"gst_{i}"
+                    f"prod_select_{i}", f"prod_name_{i}", f"hsn_{i}", f"mrp_{i}",
+                    f"ind_discount_{i}", f"qty_{i}", f"price_{i}", f"gst_{i}"
                 ])
                 
             for key in keys_to_delete:
