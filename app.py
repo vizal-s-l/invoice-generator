@@ -477,6 +477,15 @@ if invoice_items:
     pdf_bytes = None
     try:
         def generate_pdf():
+            # Helper to strip unsupported unicode characters before sending to fpdf2
+            def clean_text(t):
+                if t is None: return ""
+                t = str(t)
+                t = t.replace('\u20b9', 'Rs.').replace('\u2018', "'").replace('\u2019', "'")
+                t = t.replace('\u201c', '"').replace('\u201d', '"').replace('\u2013', '-')
+                t = t.replace('\u2014', '-').replace('\u00a0', ' ').replace('\u200b', '')
+                return t.encode('latin-1', 'replace').decode('latin-1')
+
             # We need a custom class to handle multi-page headers and footers properly
             class InvoicePDF(FPDF):
                 def __init__(self, inv_no, inv_date, billed_to_name):
@@ -502,9 +511,9 @@ if invoice_items:
                     self.cell(0, 4, "Billed To", border=0, new_x="LMARGIN", new_y="NEXT")
                     
                     self.set_font("helvetica", "", 9)
-                    self.cell(40, 4, self.inv_no, border=0, new_x="RIGHT", new_y="TOP")
+                    self.cell(40, 4, clean_text(self.inv_no), border=0, new_x="RIGHT", new_y="TOP")
                     self.cell(40, 4, self.inv_date.strftime('%d %b %Y'), border=0, new_x="RIGHT", new_y="TOP")
-                    self.cell(0, 4, self.billed_to_name if self.billed_to_name else "Client Name", border=0, new_x="LMARGIN", new_y="NEXT")
+                    self.cell(0, 4, clean_text(self.billed_to_name) if self.billed_to_name else "Client Name", border=0, new_x="LMARGIN", new_y="NEXT")
                     
                     self.ln(5)
 
@@ -545,7 +554,7 @@ if invoice_items:
             pdf.set_font("helvetica", "B", 10)
             pdf.cell(35, 6, "Invoice Number:", new_x="RIGHT", new_y="TOP")
             pdf.set_font("helvetica", "", 10)
-            pdf.cell(65, 6, f"{invoice_number}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(65, 6, clean_text(invoice_number), new_x="LMARGIN", new_y="NEXT")
             
             pdf.set_font("helvetica", "B", 10)
             pdf.cell(35, 6, "Invoice Date:", new_x="RIGHT", new_y="TOP")
@@ -566,19 +575,19 @@ if invoice_items:
             
             pdf.set_font("helvetica", "B", 10)
             if billed_by.get('Company Name'):
-                pdf.cell(100, 5, billed_by.get('Company Name', ''), new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(100, 5, clean_text(billed_by.get('Company Name', '')), new_x="LMARGIN", new_y="NEXT")
             
             pdf.set_font("helvetica", "", 10)
             if billed_by.get('Address Line 1'):
-                pdf.cell(100, 5, billed_by.get('Address Line 1', ''), new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(100, 5, clean_text(billed_by.get('Address Line 1', '')), new_x="LMARGIN", new_y="NEXT")
             if billed_by.get('Address Line 2'):
-                pdf.cell(100, 5, billed_by.get('Address Line 2', ''), new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(100, 5, clean_text(billed_by.get('Address Line 2', '')), new_x="LMARGIN", new_y="NEXT")
             if billed_by.get('GSTIN'):
-                pdf.cell(100, 5, f"GSTIN: {billed_by.get('GSTIN', '')}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(100, 5, clean_text(f"GSTIN: {billed_by.get('GSTIN', '')}"), new_x="LMARGIN", new_y="NEXT")
             if billed_by.get('PAN'):
-                pdf.cell(100, 5, f"PAN: {billed_by.get('PAN', '')}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(100, 5, clean_text(f"PAN: {billed_by.get('PAN', '')}"), new_x="LMARGIN", new_y="NEXT")
             if billed_by.get('Phone'):
-                pdf.cell(100, 5, f"Phone: {billed_by.get('Phone', '')}", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(100, 5, clean_text(f"Phone: {billed_by.get('Phone', '')}"), new_x="LMARGIN", new_y="NEXT")
             
             # Billed To (Right Side)
             # Move up and set right margin for 2-column layout
@@ -590,14 +599,14 @@ if invoice_items:
             
             pdf.set_font("helvetica", "B", 10)
             if to_name:
-                pdf.cell(0, 5, to_name, new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(0, 5, clean_text(to_name), new_x="LMARGIN", new_y="NEXT")
             
             pdf.set_font("helvetica", "", 10)
             for line in to_address.split('\n'):
                 if line.strip():
-                    pdf.cell(0, 5, line.strip(), new_x="LMARGIN", new_y="NEXT")
+                    pdf.cell(0, 5, clean_text(line.strip()), new_x="LMARGIN", new_y="NEXT")
             
-            pdf.cell(0, 5, f"State: {to_state}", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 5, clean_text(f"State: {to_state}"), new_x="LMARGIN", new_y="NEXT")
             if to_gstin:
                 pdf.cell(0, 5, f"GSTIN: {to_gstin}", new_x="LMARGIN", new_y="NEXT")
             if to_pan:
@@ -664,12 +673,12 @@ if invoice_items:
                 # Item Name (Multi-line) centered vertically
                 y_offset = (row_h - required_h) / 2
                 pdf.set_xy(curr_x1 + 7, curr_y1 + y_offset)
-                pdf.multi_cell(text_w, text_lh, str(item1['product']), border=0, align="L", new_x="RIGHT", new_y="TOP")
+                pdf.multi_cell(text_w, text_lh, clean_text(item1['product']), border=0, align="L", new_x="RIGHT", new_y="TOP")
                 pdf.rect(curr_x1 + 7, curr_y1, text_w, row_h)
                 pdf.set_xy(curr_x1 + 7 + text_w, curr_y1)
                 
                 # Other columns
-                pdf.cell(15, row_h, str(item1.get('hsn', '')), border=1, new_x="RIGHT", new_y="TOP", align="C")
+                pdf.cell(15, row_h, clean_text(item1.get('hsn', '')), border=1, new_x="RIGHT", new_y="TOP", align="C")
                 pdf.cell(11, row_h, f"{int(item1.get('mrp', 0))}", border=1, new_x="RIGHT", new_y="TOP", align="R")
                 pdf.cell(9, row_h, f"{item1['gst_percent']}%", border=1, new_x="RIGHT", new_y="TOP", align="C")
                 pdf.cell(14, row_h, f"{item1['price']:,.2f}", border=1, new_x="RIGHT", new_y="TOP", align="R")
